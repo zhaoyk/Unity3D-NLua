@@ -44,7 +44,7 @@ namespace NLua.Method
 	/*
 	 * Argument extraction with type-conversion function
 	 */
-	delegate object ExtractValue (LuaState luaState, int stackPos);
+	delegate object ExtractValue (LuaState luaState,int stackPos);
 
 	/*
 	 * Wrapper class for methods/constructors accessed from Lua.
@@ -95,7 +95,7 @@ namespace NLua.Method
 				_ExtractTarget = translator.typeChecker.GetExtractor (targetType);
 
 			_IsStatic = (bindingType & BindingFlags.Static) == BindingFlags.Static;
-			_Members  = GetMethodsRecursively (targetType.UnderlyingSystemType, methodName, bindingType | BindingFlags.Public);
+			_Members = GetMethodsRecursively (targetType.UnderlyingSystemType, methodName, bindingType | BindingFlags.Public);
 		}
 
 		MethodInfo [] GetMethodsRecursively (Type type, string methodName, BindingFlags bindingType)
@@ -178,16 +178,44 @@ namespace NLua.Method
 
 								if (_LastCalledMethod.args [_LastCalledMethod.argTypes [i].index] == null &&
 									!LuaLib.LuaIsNil (luaState, i + 1 + numStackToSkip))
-									throw new LuaException (string.Format("argument number {0} is invalid",(i + 1)));
+									throw new LuaException (string.Format ("argument number {0} is invalid", (i + 1)));
 							}
 
-							if (_IsStatic)
-								_Translator.Push (luaState, method.Invoke (null, _LastCalledMethod.args));
+							if (_IsStatic) {
+								object result = method.Invoke (null, _LastCalledMethod.args);
+								if (result != null && result.GetType ().IsArray) {
+									object[] _result = (object[])result;
+									if (_result.Length == 0) {
+										LuaLib.LuaPushNil (luaState);
+									} else {
+										foreach (var _r in _result) {
+											_Translator.Push (luaState, _r);
+										}
+										nReturnValues += _result.Length - 1;
+									}
+								} else {
+									_Translator.Push (luaState, result);
+								}
+							}
 							else {
 								if (method.IsConstructor)
 									_Translator.Push (luaState, ((ConstructorInfo)method).Invoke (_LastCalledMethod.args));
-								else
-									_Translator.Push (luaState, method.Invoke (targetObject, _LastCalledMethod.args));
+								else {
+									object result = method.Invoke (targetObject, _LastCalledMethod.args);
+									if (result != null && result.GetType ().IsArray) {
+										object[] _result = (object[])result;
+										if (_result.Length == 0) {
+											LuaLib.LuaPushNil (luaState);
+										} else {
+											foreach (var _r in _result) {
+												_Translator.Push (luaState, _r);
+											}
+											nReturnValues += _result.Length - 1;
+										}
+									} else {
+										_Translator.Push (luaState, result);
+									}
+								}
 							}
 
 							failedCall = false;
@@ -254,7 +282,20 @@ namespace NLua.Method
 							typeArgs.Add (arg.GetType ());
 
 						var concreteMethod = (methodToCall as MethodInfo).MakeGenericMethod (typeArgs.ToArray ());
-						_Translator.Push (luaState, concreteMethod.Invoke (targetObject, _LastCalledMethod.args));
+						object result = concreteMethod.Invoke (targetObject, _LastCalledMethod.args);
+						if (result != null && result.GetType ().IsArray) {
+							object[] _result = (object[])result;
+							if (_result.Length == 0) {
+								LuaLib.LuaPushNil (luaState);
+							} else {
+								foreach (var _r in _result) {
+									_Translator.Push (luaState, _r);
+								}
+								nReturnValues += _result.Length - 1;
+							}
+						} else {
+							_Translator.Push (luaState, result);
+						}
 						failedCall = false;
 					} else if (methodToCall.ContainsGenericParameters) {
 						_Translator.ThrowError (luaState, "unable to invoke method on generic class as the current method is an open generic method");
@@ -280,13 +321,41 @@ namespace NLua.Method
 					throw new LuaException ("Lua stack overflow");
 
 				try {
-					if (isStatic)
-						_Translator.Push (luaState, _LastCalledMethod.cachedMethod.Invoke (null, _LastCalledMethod.args));
+					if (isStatic) {
+						object result = _LastCalledMethod.cachedMethod.Invoke (null, _LastCalledMethod.args);
+						if (result != null && result.GetType ().IsArray) {
+							object[] _result = (object[])result;
+							if (_result.Length == 0) {
+								LuaLib.LuaPushNil (luaState);
+							} else {
+								foreach (var _r in _result) {
+									_Translator.Push (luaState, _r);
+								}
+								nReturnValues += _result.Length - 1;
+							}
+						} else {
+							_Translator.Push (luaState, result);
+						}
+					}
 					else {
 						if (_LastCalledMethod.cachedMethod.IsConstructor)
 							_Translator.Push (luaState, ((ConstructorInfo)_LastCalledMethod.cachedMethod).Invoke (_LastCalledMethod.args));
-						else
-							_Translator.Push (luaState, _LastCalledMethod.cachedMethod.Invoke (targetObject, _LastCalledMethod.args));
+						else {
+							object result = _LastCalledMethod.cachedMethod.Invoke (targetObject, _LastCalledMethod.args);
+							if (result != null && result.GetType ().IsArray) {
+								object[] _result = (object[])result;
+								if (_result.Length == 0) {
+									LuaLib.LuaPushNil (luaState);
+								} else {
+									foreach (var _r in _result) {
+										_Translator.Push (luaState, _r);
+									}
+									nReturnValues += _result.Length - 1;
+								}
+							} else {
+								_Translator.Push (luaState, result);
+							}
+						}
 					}
 				} catch (TargetInvocationException e) {
 					return SetPendingException (e.GetBaseException ());

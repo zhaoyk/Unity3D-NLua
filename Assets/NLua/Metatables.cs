@@ -80,18 +80,29 @@ namespace NLua
 		Dictionary<object, object> memberCache = new Dictionary<object, object> ();
 		ObjectTranslator translator;
 
+		static string MethodMissingName = "MethodMissing";
+
 		/*
 		 * __index metafunction for CLR objects. Implemented in Lua.
 		 */
 		static string luaIndexFunction =
-			@"local function index(obj,name)
+			@"
+			local function methodMissing(method, name)
+				return function(obj, ...)
+					return method(obj, name, ...)
+				end
+			end
+			local function index(obj,name)
 			    local meta = getmetatable(obj)
 			    local cached = meta.cache[name]
 			    if cached ~= nil then
 			       return cached
 			    else
-			       local value,isFunc = get_object_member(obj,name)
-			       
+			       local value,isFunc,isMethodMissing = get_object_member(obj,name)
+			       if isMethodMissing then
+					   value = methodMissing(value, name)
+					   isFunc = true
+				   end
 			       if isFunc then
 					meta.cache[name]=value
 			       end
@@ -430,6 +441,12 @@ namespace NLua
 				if (!string.IsNullOrEmpty (methodName) && IsExtensionMethodPresent (objType, methodName)) {
 					return GetExtensionMethod (luaState, objType, obj, methodName);
 				}
+
+				if (!string.IsNullOrEmpty (methodName) && isMethodMissingPresent (proxyType)) {
+					int r = GetMethodMissingMethod (luaState, proxyType, obj, methodName);
+					if (r > 0)
+						return r;
+				}
 				// Try to use get_Item to index into this .net object
 				var methods = objType.GetMethods ();
 
@@ -500,22 +517,33 @@ namespace NLua
 
 			string methodName = LuaLib.LuaToString (luaState, 2).ToString ();
 
-			if (string.IsNullOrEmpty(methodName)) {
+			if (string.IsNullOrEmpty (methodName)) {
 				LuaLib.LuaPushNil (luaState);
 				LuaLib.LuaPushBoolean (luaState, false);
 				return 2;
 			}
 
-			GetMember (luaState, new ProxyType(obj.GetType ()), obj, "__luaInterface_base_" + methodName, BindingFlags.Instance);
+			GetMember (luaState, new ProxyType (obj.GetType ()), obj, "__luaInterface_base_" + methodName, BindingFlags.Instance);
 			LuaLib.LuaSetTop (luaState, -2);
 
 			if (LuaLib.LuaType (luaState, -1) == LuaTypes.Nil) {
 				LuaLib.LuaSetTop (luaState, -2);
-				return GetMember (luaState, new ProxyType(obj.GetType ()), obj, methodName, BindingFlags.Instance);
+				return GetMember (luaState, new ProxyType (obj.GetType ()), obj, methodName, BindingFlags.Instance);
 			}
 
 			LuaLib.LuaPushBoolean (luaState, false);
 			return 2;
+		}
+
+		bool isMethodMissingPresent (ProxyType objType)
+		{
+			object cachedMember = CheckMemberCache (memberCache, objType, MethodMissingName);
+			
+			if (cachedMember != null)
+				return true;
+			
+			var info = objType.GetMethod (MethodMissingName);
+			return info != null;
 		}
 
 		/// <summary>
@@ -545,18 +573,44 @@ namespace NLua
 			return translator.IsExtensionMethodPresent (type, name);
 		}
 
+		int GetMethodMissingMethod (LuaState luaState, ProxyType objType, object obj, string methodName)
+		{
+			object cachedMember = CheckMemberCache (memberCache, objType, MethodMissingName);
+			
+			if (cachedMember != null) {
+				translator.PushFunction (luaState, (LuaNativeFunction)cachedMember);
+				translator.Push (luaState, true);
+				translator.Push (luaState, true);
+				return 3;
+			} else {
+				var info = objType.GetMethod (MethodMissingName);
+				if (info != null) {
+					var wrapper = new LuaNativeFunction ((new LuaMethodWrapper (translator, objType, MethodMissingName, BindingFlags.Instance)).invokeFunction);
+					
+					SetMemberCache (memberCache, objType, MethodMissingName, wrapper);
+					
+					translator.PushFunction (luaState, wrapper);
+					translator.Push (luaState, true);
+					translator.Push (luaState, true);
+					return 3;
+				} else {
+					return 0;
+				}
+			}
+		}
+
 		int GetExtensionMethod (LuaState luaState, Type type, object obj, string name)
 		{
 			object cachedMember = CheckMemberCache (memberCache, type, name);
 
 			if (cachedMember != null && cachedMember is LuaNativeFunction) {
-					translator.PushFunction (luaState, (LuaNativeFunction)cachedMember);
-					translator.Push (luaState, true);
-					return 2;
+				translator.PushFunction (luaState, (LuaNativeFunction)cachedMember);
+				translator.Push (luaState, true);
+				return 2;
 			}
 
 			MethodInfo methodInfo = translator.GetExtensionMethod (type, name);
-			var wrapper = new LuaNativeFunction ((new LuaMethodWrapper (translator, obj,new ProxyType(type), methodInfo)).invokeFunction);
+			var wrapper = new LuaNativeFunction ((new LuaMethodWrapper (translator, obj, new ProxyType (type), methodInfo)).invokeFunction);
 
 			SetMemberCache (memberCache, type, name, wrapper);
 

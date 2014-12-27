@@ -85,5 +85,10 @@ namespace NLua
 			return proxy.GetMethod (name, bindingAttr, null, signature, null);
 #endif
 		}
+
+		public MethodInfo GetMethod (string name)
+		{
+			return proxy.GetMethod (name);
+		}
 	}
 }
